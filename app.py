@@ -1,144 +1,86 @@
 import streamlit as st
 import pandas as pd
-def get_indicators(df):
+import yfinance as yf
+import datetime
+import pytz
+
+# 1. Indicators Calculation
+def add_indicators(df):
     df['SMA_50'] = df['Close'].rolling(window=50).mean()
     df['SMA_200'] = df['Close'].rolling(window=200).mean()
+    df['Vol_SMA_20'] = df['Volume'].rolling(window=20).mean()
+    # VWAP Calculation
+    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
     
-    # RSI calculation
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
-    df['RSI_14'] = 100 - (100 / (1 + rs))
-    
-    df['Vol_SMA_20'] = df['Volume'].rolling(window=20).mean()
+    df['RSI'] = 100 - (100 / (1 + rs))
     return df
-    
-import yfinance as yf
-import time
-import datetime
-import pytz
 
-# --- 1. Stocks List Fetch Karne Ka Function ---
-@st.cache_data(ttl=86400) # Din mein sirf ek baar net se download karega taaki fast rahe
-def get_nifty_500_symbols():
-    url = "https://niftyindices.com/IndexConstituent/ind_nifty500list.csv"
-    try:
-        df = pd.read_csv(url)
-        symbols = [symbol + ".NS" for symbol in df['Symbol'].tolist()]
-        return symbols
-    except Exception as e:
-        st.error("Nifty 500 ki list load nahi ho payi. Puraani list use karein.")
-        return []
+# 2. Stocks List Fetching
+@st.cache_data(ttl=86400)
+def get_stocks(category):
+    urls = {
+        "Nifty 500 (Top 200)": "https://niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+        "Midcap (Top 200)": "https://niftyindices.com/IndexConstituent/ind_niftymidcap200list.csv",
+        "Smallcap (Top 200)": "https://niftyindices.com/IndexConstituent/ind_niftysmallcap200list.csv"
+    }
+    df = pd.read_csv(urls[category])
+    return [s + ".NS" for s in df['Symbol'].head(200).tolist()]
 
-# --- 2. Technical Indicators & Setup Logic ---
-def check_stock_setup(df, strategy_selected):
-    # 200 DMA nikalne ke liye kam se kam 200 din ka data chahiye
-    if len(df) < 200:
-        return False
-        
-    # Indicators Calculate Karna
-    df['SMA_50'] = ta.sma(df['Close'], length=50)
-    df['SMA_200'] = ta.sma(df['Close'], length=200)
-    df['RSI_14'] = ta.rsi(df['Close'], length=14)
-    df['Vol_SMA_20'] = ta.sma(df['Volume'], length=20)
-    
-    # Latest aur ek din pehle ka data
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    
-    # Breakout Logic
-    if strategy_selected == "Breakout":
-        # Kal 50 SMA ke niche tha, Aaj upar aa gaya
-        price_breakout = (prev['Close'] < prev['SMA_50']) and (latest['Close'] > latest['SMA_50'])
-        # Volume 2x average se zyada hai
-        volume_spike = latest['Volume'] > (2 * latest['Vol_SMA_20'])
-        
-        if price_breakout and volume_spike:
-            return True
-            
-    # Reversal Logic
-    elif strategy_selected == "Reversal":
-        # RSI 30 ke niche se ghoom kar upar aaya
-        rsi_reversal = (prev['RSI_14'] < 30) and (latest['RSI_14'] > 30)
-        # Price 200 SMA (long term support) ke upar ho
-        above_support = latest['Close'] > latest['SMA_200']
-        
-        if rsi_reversal and above_support:
-            return True
+# 3. UI Setup
+st.set_page_config(page_title="Pro Stock Scanner", layout="wide")
+st.title("📈 Pro Swing Trading Scanner")
 
-    return False
+category = st.radio("Select Index:", ("Nifty 500 (Top 200)", "Midcap (Top 200)", "Smallcap (Top 200)"), horizontal=True)
+strategy = st.radio("Strategy:", ("Breakout", "Reversal"), horizontal=True)
 
-# --- 3. Streamlit UI (Frontend) ---
-st.set_page_config(page_title="Live Stock Scanner", layout="centered")
-st.title("📈 Nifty 500 Scanner")
-
-stocks_list = get_nifty_500_symbols()
-
-# Radio Button Strategy Select karne ke liye
-strategy_ui = st.radio(
-    "Aapko konsa setup scan karna hai?",
-    ("Breakout (50 DMA Crossover + Volume)", "Reversal (RSI < 30 Bounce + 200 DMA Support)")
-)
-
-# Backend ke liye Strategy ka naam chota kar liya
-if "Breakout" in strategy_ui:
-    strategy = "Breakout"
-else:
-    strategy = "Reversal"
-
-# --- 4. Main Scanning Engine ---
+# 4. Main Scanning Engine
 if st.button("🚀 Scan Shuru Karein"):
-    if len(stocks_list) == 0:
-        st.warning("Stocks list khali hai. Internet connection check karein.")
+    stocks = get_stocks(category)
+    results = []
+    
+    with st.spinner("Scanning 200 stocks..."):
+        data = yf.download(stocks, period="1y", interval="1d", group_by="ticker", threads=True, progress=False)
+        
+        for symbol in stocks:
+            try:
+                df = data[symbol].dropna()
+                df = add_indicators(df)
+                latest = df.iloc[-1]
+                prev = df.iloc[-2]
+                
+                # Logic: Breakout
+                if strategy == "Breakout":
+                    vol_spike = latest['Volume'] > (1.5 * latest['Vol_SMA_20'])
+                    if prev['Close'] < prev['SMA_50'] and latest['Close'] > latest['SMA_50'] and vol_spike and latest['Close'] > latest['VWAP']:
+                        sl = round(df['Low'].tail(5).min(), 2)
+                        target = round(latest['Close'] * 1.04, 2)
+                        results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'SL': sl, 'Target': target, 'RSI': round(latest['RSI'], 2), 'VWAP': round(latest['VWAP'], 2)})
+                
+                # Logic: Reversal
+                elif strategy == "Reversal":
+                    if prev['RSI'] < 30 and latest['RSI'] > 30 and latest['Close'] > latest['SMA_200']:
+                        sl = round(latest['Close'] * 0.96, 2)
+                        target = round(latest['Close'] * 1.05, 2)
+                        results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'SL': sl, 'Target': target, 'RSI': round(latest['RSI'], 2)})
+            except:
+                continue
+    
+    if results:
+        st.success(f"Setup found: {len(results)} stocks")
+        df_results = pd.DataFrame(results)
+        st.dataframe(df_results, use_container_width=True)
+        st.json(df_results.to_json(orient='records'))
     else:
-        with st.spinner(f"Nifty 500 ke saare stocks scan ho rahe hain. Thoda intezaar karein..."):
-            
-            # 1 saal ka data ek sath download taaki 200 DMA ban sake
-            data = yf.download(stocks_list, period="1y", interval="1d", group_by="ticker", threads=True, show_errors=False)
-            
-            scanned_stocks = []
-            
-            # Har stock ka loop chalayenge
-            for symbol in stocks_list:
-                try:
-                    # Agar yfinance ne data return kiya hai
-                    if symbol in data.columns.levels[0]:
-                        df = data[symbol].dropna()
-                        if check_stock_setup(df, strategy):
-                            # '.NS' hata kar sirf stock ka naam dikhayenge
-                            clean_symbol = symbol.replace('.NS', '')
-                            scanned_stocks.append(clean_symbol)
-                except Exception as e:
-                    pass # Kuch stocks delist ho jate hain, unko ignore karega
-            
-            # Result Print Karna
-            if len(scanned_stocks) > 0:
-                st.success(f"🎉 Total {len(scanned_stocks)} stocks mile hain ({strategy} setup ke liye):")
-                st.write(scanned_stocks)
-            else:
-                st.info(f"Abhi kisi bhi stock mein {strategy} ka setup nahi ban raha hai.")
+        st.info("No matching stocks found.")
 
-# --- 5. Auto-Refresh Logic (Live Market Hours) ---
-def is_market_open():
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.datetime.now(ist)
+# 5. Auto-Refresh
+import time
+if 9 <= datetime.datetime.now(pytz.timezone('Asia/Kolkata')).hour < 16:
+    st.info("Market is Live. Auto-refreshing in 5 mins...")
+    time.sleep(300)
+    st.rerun()
     
-    # Monday = 0 se Friday = 4
-    if now.weekday() > 4:
-        return False
-        
-    # 9:15 AM se 3:30 PM (15:30)
-    market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_end = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    
-    return market_start <= now <= market_end
-
-st.markdown("---")
-if is_market_open():
-    st.info("🟢 Live Market On: Scanner har 5 minute mein apne aap refresh hoga.")
-    time.sleep(300) 
-    st.rerun() 
-else:
-    st.warning("🔴 Market abhi closed hai. Auto-refresh off hai.")
-        
