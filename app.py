@@ -1,92 +1,166 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import datetime
-import pytz
-import requests
-import time
+import numpy as np
 
-# --- 1. Telegram Alert Function ---
-def send_telegram_msg(message):
-    token = "8458962752:AAHCcvV-n_BxGN3GgAM827Q_eV8566_-lcA"
-    chat_id = "8458962752"
-    url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={message}"
-    try:
-        requests.get(url, timeout=5)
-    except:
-        pass
-
-# --- 2. Indicators ---
+# ---------------------------
+# Indicators
+# ---------------------------
 def add_indicators(df):
-    df['SMA_50'] = df['Close'].rolling(window=50).mean()
-    df['SMA_200'] = df['Close'].rolling(window=200).mean()
-    df['Vol_SMA_20'] = df['Volume'].rolling(window=20).mean()
-    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
-    
+    df['SMA_50'] = df['Close'].rolling(50).mean()
+    df['SMA_200'] = df['Close'].rolling(200).mean()
+    df['Vol_SMA_20'] = df['Volume'].rolling(20).mean()
+
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
+
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+
+    gain = delta.where(delta > 0, 0).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
+
     return df
 
-# --- 3. Stocks List (Top 50) ---
-@st.cache_data(ttl=86400)
-def get_stocks(category):
-    urls = {
-        "Nifty 500 (Top 50)": "https://niftyindices.com/IndexConstituent/ind_nifty500list.csv",
-        "Midcap (Top 50)": "https://niftyindices.com/IndexConstituent/ind_niftymidcap100list.csv",
-        "Smallcap (Top 50)": "https://niftyindices.com/IndexConstituent/ind_niftysmallcap100list.csv"
-    }
-    df = pd.read_csv(urls[category])
-    return [s + ".NS" for s in df['Symbol'].head(50).tolist()]
+# ---------------------------
+# NSE Top Stocks
+# ---------------------------
+NSE_TOP_100 = [
+    "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY",
+    "ITC","SBIN","LT","AXISBANK","KOTAKBANK",
+    "BAJFINANCE","ASIANPAINT","MARUTI","SUNPHARMA",
+    "ULTRACEMCO","NTPC","POWERGRID","TITAN",
+    "TATAMOTORS","M&M","WIPRO","HCLTECH",
+    "TECHM","INDUSINDBK","NESTLEIND","HINDUNILVR",
+    "ONGC","COALINDIA","ADANIPORTS","BAJAJFINSV",
+    "JSWSTEEL","TATASTEEL","CIPLA","GRASIM",
+    "EICHERMOT","BRITANNIA","SHRIRAMFIN","HEROMOTOCO",
+    "DRREDDY","APOLLOHOSP","HDFCLIFE","SBILIFE",
+    "BPCL","ADANIENT","DIVISLAB","TRENT",
+    "PIDILITIND","DABUR","GODREJCP","INDIGO"
+]
 
-# --- 4. UI Setup ---
-st.set_page_config(page_title="Pro Stock Scanner", layout="wide")
-st.title("📈 Pro Swing Trading Scanner")
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(
+    page_title="NSE Stock Scanner",
+    layout="wide"
+)
 
-category = st.radio("Select Index:", ("Nifty 500 (Top 50)", "Midcap (Top 50)", "Smallcap (Top 50)"), horizontal=True)
-strategy = st.radio("Strategy:", ("Breakout", "Reversal"), horizontal=True)
+st.title("📈 NSE Breakout & Reversal Scanner")
 
-# --- 5. Scanning Engine ---
-if st.button("🚀 Scan Shuru Karein"):
-    stocks = get_stocks(category)
+strategy = st.radio(
+    "Select Strategy",
+    ["Breakout", "Reversal", "Both"],
+    horizontal=True
+)
+
+# ---------------------------
+# Scan Button
+# ---------------------------
+if st.button("🚀 Start Scan"):
+
     results = []
-    
-    with st.spinner("Scanning..."):
-        data = yf.download(stocks, period="1y", interval="1d", group_by="ticker", threads=True, progress=False)
-        
-        for symbol in stocks:
+
+    with st.spinner("Scanning stocks..."):
+
+        for stock in NSE_TOP_100:
+
+            symbol = stock + ".NS"
+
             try:
-                df = data[symbol].dropna()
+                df = yf.download(
+                    symbol,
+                    period="1y",
+                    interval="1d",
+                    progress=False,
+                    auto_adjust=True
+                )
+
+                if len(df) < 220:
+                    continue
+
                 df = add_indicators(df)
+
                 latest = df.iloc[-1]
                 prev = df.iloc[-2]
-                
-                if strategy == "Breakout":
-                    vol_spike = latest['Volume'] > (1.5 * latest['Vol_SMA_20'])
-                    if prev['Close'] < prev['SMA_50'] and latest['Close'] > latest['SMA_50'] and vol_spike and latest['Close'] > latest['VWAP']:
-                        sl = round(df['Low'].tail(5).min(), 2)
-                        target = round(latest['Close'] * 1.04, 2)
-                        msg = f"🚀 Breakout: {symbol.replace('.NS','')}\nPrice: {round(latest['Close'], 2)}"
-                        send_telegram_msg(msg)
-                        time.sleep(1)
-                        results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'SL': sl, 'Target': target})
-                
-                elif strategy == "Reversal":
-                    if prev['RSI'] < 30 and latest['RSI'] > 30 and latest['Close'] > latest['SMA_200']:
-                        sl = round(latest['Close'] * 0.96, 2)
-                        target = round(latest['Close'] * 1.05, 2)
-                        msg = f"🔄 Reversal: {symbol.replace('.NS','')}\nPrice: {round(latest['Close'], 2)}"
-                        send_telegram_msg(msg)
-                        time.sleep(1)
-                        results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'SL': sl, 'Target': target})
-            except:
-                continue
-    
+
+                # Breakout
+                if strategy in ["Breakout", "Both"]:
+
+                    vol_spike = (
+                        latest['Volume']
+                        > 1.5 * latest['Vol_SMA_20']
+                    )
+
+                    breakout = (
+                        prev['Close'] < prev['SMA_50']
+                        and latest['Close'] > latest['SMA_50']
+                        and latest['Close'] > latest['VWAP']
+                        and vol_spike
+                    )
+
+                    if breakout:
+
+                        results.append({
+                            "Type": "Breakout",
+                            "Symbol": stock,
+                            "Price": round(float(latest['Close']),2),
+                            "RSI": round(float(latest['RSI']),2),
+                            "SL": round(float(df['Low'].tail(5).min()),2),
+                            "Target": round(float(latest['Close']*1.04),2)
+                        })
+
+                # Reversal
+                if strategy in ["Reversal", "Both"]:
+
+                    reversal = (
+                        prev['RSI'] < 30
+                        and latest['RSI'] > 30
+                        and latest['Close'] > latest['SMA_200']
+                    )
+
+                    if reversal:
+
+                        results.append({
+                            "Type": "Reversal",
+                            "Symbol": stock,
+                            "Price": round(float(latest['Close']),2),
+                            "RSI": round(float(latest['RSI']),2),
+                            "SL": round(float(latest['Close']*0.96),2),
+                            "Target": round(float(latest['Close']*1.05),2)
+                        })
+
+            except Exception as e:
+                st.warning(f"{stock}: {e}")
+
+    # ---------------------------
+    # Results
+    # ---------------------------
     if results:
-        st.success(f"Scan Complete: {len(results)} setups found.")
-        st.dataframe(pd.DataFrame(results), use_container_width=True)
+
+        result_df = pd.DataFrame(results)
+
+        st.success(
+            f"✅ Scan Complete - {len(result_df)} Setups Found"
+        )
+
+        st.dataframe(
+            result_df,
+            use_container_width=True
+        )
+
+        csv = result_df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            "📥 Download CSV",
+            csv,
+            "scanner_results.csv",
+            "text/csv"
+        )
+
     else:
         st.info("No matching stocks found.")
-                        
