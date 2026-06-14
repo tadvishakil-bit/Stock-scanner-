@@ -1,164 +1,131 @@
 import streamlit as st
 import pandas as pd
+import pandas_ta as ta
 import yfinance as yf
+import time
+import datetime
+import pytz
 
-st.set_page_config(page_title="Nifty 500 Split Scanner", layout="centered")
-st.title("⚡ Smart Scanner (Batch-Wise)")
-st.write("Server speed badhane ke liye stocks ko 2 hisso me baant diya gaya hai.")
-
-# Batch 1: Pehle Top 100 Stocks
-batch_1 = [
-    "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
-    "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BPCL.NS", "BHARTIARTL.NS",
-    "BRITANNIA.NS", "CIPLA.NS", "COALINDIA.NS", "DIVISLAB.NS", "DRREDDY.NS",
-    "EICHERMOT.NS", "GRASIM.NS", "HCLTECH.NS", "HDFCBANK.NS", "HDFCLIFE.NS",
-    "HEROMOTOCO.NS", "HINDALCO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", "ITC.NS",
-    "INDUSINDBK.NS", "INFY.NS", "JSWSTEEL.NS", "KOTAKBANK.NS", "LTIM.NS",
-    "LT.NS", "M&M.NS", "MARUTI.NS", "NTPC.NS", "NESTLEIND.NS", "ONGC.NS",
-    "POWERGRID.NS", "RELIANCE.NS", "SBILIFE.NS", "SBIN.NS", "SUNPHARMA.NS",
-    "TCS.NS", "TATACONSUM.NS", "TATAMOTORS.NS", "TATASTEEL.NS", "TECHM.NS",
-    "TITAN.NS", "ULTRACEMCO.NS", "UPL.NS", "WIPRO.NS", "HAL.NS", "BEL.NS",
-    "IRCTC.NS", "ZOMATO.NS", "JIOFIN.NS", "PAYTM.NS", "TVSMOTOR.NS", "BHEL.NS",
-    "DLF.NS", "PNB.NS", "BANKBARODA.NS", "INDIGO.NS", "TRENT.NS", "CHOLAFIN.NS",
-    "HDFCAMC.NS", "MUTHOOTFIN.NS", "SRF.NS", "PIIND.NS", "POLYCAB.NS", "DIXON.NS",
-    "LUPIN.NS", "AUROPHARMA.NS", "AMBUJACEM.NS", "ACC.NS", "NYKAA.NS", "POLICYBZR.NS",
-    "HINDPETRO.NS", "IOC.NS", "GAIL.NS", "SAIL.NS", "VEDL.NS", "NMDC.NS",
-    "IDFCFIRSTB.NS", "FEDERALBNK.NS", "BANDHANBNK.NS", "AUBANK.NS", "ABCAPITAL.NS",
-    "M&MFIN.NS", "MANAPPURAM.NS", "BOSCHLTD.NS", "CUMMINSIND.NS", "ESCORTS.NS",
-    "APOLLOTYRE.NS", "MRF.NS", "ASHOKLEY.NS", "TATACHEM.NS", "COROMANDEL.NS"
-]
-
-# Batch 2: Baaki ke 100 Stocks
-batch_2 = [
-    "IGL.NS", "MGL.NS", "GUJGASLTD.NS", "PETRONET.NS", "CONCOR.NS", "MFSL.NS",
-    "MAXHEALTH.NS", "SYNGENE.NS", "LAURUSLABS.NS", "IPCALAB.NS", "ALKEM.NS",
-    "ASTRAL.NS", "SUPREMEIND.NS", "PAGEIND.NS", "BATAINDIA.NS", "VOLTAS.NS",
-    "HAVELLS.NS", "CROMPTON.NS", "WHIRLPOOL.NS", "JUBLFOOD.NS", "DEVYANI.NS",
-    "NAUKRI.NS", "MPHASIS.NS", "COFORGE.NS", "PERSISTENT.NS", "TATAELXSI.NS",
-    "RECLTD.NS", "PFC.NS", "IDBI.NS", "YESBANK.NS", "UNIONBANK.NS", "CANBK.NS",
-    "INDIANB.NS", "UCOBANK.NS", "CENTRALBK.NS", "MAHABANK.NS", "SUZLON.NS",
-    "IREDA.NS", "NHPC.NS", "SJVN.NS", "HUDCO.NS", "NBCC.NS", "ENGINERSIN.NS",
-    "COCHINSHIP.NS", "MAZDOCK.NS", "GRSE.NS", "BDL.NS", "BEML.NS", "CGPOWER.NS",
-    "KAYNES.NS", "IDEA.NS", "INDHOTEL.NS", "OBEROIRLTY.NS", "GODREJPROP.NS",
-    "PRESTIGE.NS", "BRIGADE.NS", "SOBHA.NS", "LODHA.NS", "MCX.NS", "CDSL.NS",
-    "BSE.NS", "ANGELONE.NS", "MOTILALOFS.NS", "IEX.NS", "TATACOMM.NS", "BHARATFORG.NS",
-    "SONACOMS.NS", "MOTHERSON.NS", "BALKRISIND.NS", "GLENMARK.NS", "BIOCON.NS",
-    "GRANULES.NS", "ZYDUSLIFE.NS", "TORNTPHARM.NS", "FORTIS.NS", "MEDANTA.NS",
-    "AWL.NS", "PATANJALI.NS", "RADICO.NS", "UBL.NS", "ABFRL.NS", "MANYAVAR.NS",
-    "METROBRAND.NS", "CAMPUS.NS", "RELAXO.NS", "VBL.NS", "DEEPAKNTR.NS", "NAVINFLUOR.NS",
-    "AARTIIND.NS", "ATUL.NS", "TATAINVEST.NS", "BAJAJHLDNG.NS"
-]
-
-def calculate_rsi(data, window=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def check_fundamentals(ticker):
+# --- 1. Stocks List Fetch Karne Ka Function ---
+@st.cache_data(ttl=86400) # Din mein sirf ek baar net se download karega taaki fast rahe
+def get_nifty_500_symbols():
+    url = "https://niftyindices.com/IndexConstituent/ind_nifty500list.csv"
     try:
-        info = yf.Ticker(ticker).info
-        roe = info.get('returnOnEquity', 0) or 0
-        debt_eq = info.get('debtToEquity', 100) or 100
-        if roe >= 0.10 and debt_eq <= 150:
+        df = pd.read_csv(url)
+        symbols = [symbol + ".NS" for symbol in df['Symbol'].tolist()]
+        return symbols
+    except Exception as e:
+        st.error("Nifty 500 ki list load nahi ho payi. Puraani list use karein.")
+        return []
+
+# --- 2. Technical Indicators & Setup Logic ---
+def check_stock_setup(df, strategy_selected):
+    # 200 DMA nikalne ke liye kam se kam 200 din ka data chahiye
+    if len(df) < 200:
+        return False
+        
+    # Indicators Calculate Karna
+    df['SMA_50'] = ta.sma(df['Close'], length=50)
+    df['SMA_200'] = ta.sma(df['Close'], length=200)
+    df['RSI_14'] = ta.rsi(df['Close'], length=14)
+    df['Vol_SMA_20'] = ta.sma(df['Volume'], length=20)
+    
+    # Latest aur ek din pehle ka data
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    # Breakout Logic
+    if strategy_selected == "Breakout":
+        # Kal 50 SMA ke niche tha, Aaj upar aa gaya
+        price_breakout = (prev['Close'] < prev['SMA_50']) and (latest['Close'] > latest['SMA_50'])
+        # Volume 2x average se zyada hai
+        volume_spike = latest['Volume'] > (2 * latest['Vol_SMA_20'])
+        
+        if price_breakout and volume_spike:
             return True
-        return False
-    except:
-        return False
+            
+    # Reversal Logic
+    elif strategy_selected == "Reversal":
+        # RSI 30 ke niche se ghoom kar upar aaya
+        rsi_reversal = (prev['RSI_14'] < 30) and (latest['RSI_14'] > 30)
+        # Price 200 SMA (long term support) ke upar ho
+        above_support = latest['Close'] > latest['SMA_200']
+        
+        if rsi_reversal and above_support:
+            return True
 
-st.markdown("---")
+    return False
 
-# 🗂 BATCH SELECT KARNE KA OPTION
-batch_choice = st.selectbox(
-    "📂 Kaunsa Batch Scan Karna Hai?",
-    ["Batch 1 (Top 100 Stocks)", "Batch 2 (Next 100 Midcaps)"]
+# --- 3. Streamlit UI (Frontend) ---
+st.set_page_config(page_title="Live Stock Scanner", layout="centered")
+st.title("📈 Nifty 500 Scanner")
+
+stocks_list = get_nifty_500_symbols()
+
+# Radio Button Strategy Select karne ke liye
+strategy_ui = st.radio(
+    "Aapko konsa setup scan karna hai?",
+    ("Breakout (50 DMA Crossover + Volume)", "Reversal (RSI < 30 Bounce + 200 DMA Support)")
 )
 
-if batch_choice == "Batch 1 (Top 100 Stocks)":
-    current_watchlist = batch_1
+# Backend ke liye Strategy ka naam chota kar liya
+if "Breakout" in strategy_ui:
+    strategy = "Breakout"
 else:
-    current_watchlist = batch_2
+    strategy = "Reversal"
 
-# 🔘 STRATEGY OPTION
-strategy = st.radio(
-    "⚙️ Aapko kaunsa Scanner use karna hai?",
-    ["📉 1. Only RSI Reversal Scanner", "🚀 2. Only Breakout Scanner"]
-)
-st.markdown("---")
-
-if st.button("🔍 Start Scanning"):
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-    
-    selected_stocks = []
-    total_stocks = len(current_watchlist)
-    
-    for i, ticker in enumerate(current_watchlist):
-        try:
-            progress_text.text(f"Scanning {ticker} ({i+1}/{total_stocks})...")
-            progress_bar.progress((i + 1) / total_stocks)
-            
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-            if len(df) < 50:
-                continue
-                
-            df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
-            df['RSI'] = calculate_rsi(df['Close'], 14)
-            
-            latest_close = float(df['Close'].iloc[-1])
-            latest_vol = float(df['Volume'].iloc[-1])
-            vol_sma = float(df['Vol_SMA'].iloc[-1])
-            rsi = float(df['RSI'].iloc[-1])
-            
-            # ==========================================
-            # SCANNER 1: RSI REVERSAL
-            # ==========================================
-            if strategy == "📉 1. Only RSI Reversal Scanner":
-                df['DMA_20'] = df['Close'].rolling(window=20).mean()
-                dma20 = float(df['DMA_20'].iloc[-1])
-                
-                cond_rsi = 28 <= rsi <= 45
-                cond_vol = latest_vol > (vol_sma * 1.5)
-                cond_dma = latest_close >= (dma20 * 0.97)
-                
-                if cond_rsi and cond_vol and cond_dma:
-                    if check_fundamentals(ticker):
-                        selected_stocks.append({
-                            "Stock": ticker.replace(".NS", ""),
-                            "Price (₹)": round(latest_close, 2),
-                            "RSI": round(rsi, 2),
-                            "Type": "RSI Reversal"
-                        })
-            
-            # ==========================================
-            # SCANNER 2: BREAKOUT
-            # ==========================================
-            elif strategy == "🚀 2. Only Breakout Scanner":
-                df['20_Day_High'] = df['High'].shift(1).rolling(window=20).max()
-                prev_20_high = float(df['20_Day_High'].iloc[-1])
-                
-                cond_price_breakout = latest_close > prev_20_high
-                cond_high_volume = latest_vol > (vol_sma * 1.5)
-                cond_rsi_strong = rsi > 60
-                
-                if cond_price_breakout and cond_high_volume and cond_rsi_strong:
-                    if check_fundamentals(ticker):
-                        selected_stocks.append({
-                            "Stock": ticker.replace(".NS", ""),
-                            "Price (₹)": round(latest_close, 2),
-                            "RSI": round(rsi, 2),
-                            "Type": "Breakout"
-                        })
-                        
-        except Exception as e:
-            pass
-            
-    progress_text.text("Scan Complete! ✅")
-    
-    if len(selected_stocks) > 0:
-        st.success(f"🎉 Perfect Matches Found in {batch_choice}:")
-        st.table(pd.DataFrame(selected_stocks))
+# --- 4. Main Scanning Engine ---
+if st.button("🚀 Scan Shuru Karein"):
+    if len(stocks_list) == 0:
+        st.warning("Stocks list khali hai. Internet connection check karein.")
     else:
-        st.warning("⚠️ Is batch me kisi strong fundamental stock me ye setup nahi mila.")
+        with st.spinner(f"Nifty 500 ke saare stocks scan ho rahe hain. Thoda intezaar karein..."):
+            
+            # 1 saal ka data ek sath download taaki 200 DMA ban sake
+            data = yf.download(stocks_list, period="1y", interval="1d", group_by="ticker", threads=True, show_errors=False)
+            
+            scanned_stocks = []
+            
+            # Har stock ka loop chalayenge
+            for symbol in stocks_list:
+                try:
+                    # Agar yfinance ne data return kiya hai
+                    if symbol in data.columns.levels[0]:
+                        df = data[symbol].dropna()
+                        if check_stock_setup(df, strategy):
+                            # '.NS' hata kar sirf stock ka naam dikhayenge
+                            clean_symbol = symbol.replace('.NS', '')
+                            scanned_stocks.append(clean_symbol)
+                except Exception as e:
+                    pass # Kuch stocks delist ho jate hain, unko ignore karega
+            
+            # Result Print Karna
+            if len(scanned_stocks) > 0:
+                st.success(f"🎉 Total {len(scanned_stocks)} stocks mile hain ({strategy} setup ke liye):")
+                st.write(scanned_stocks)
+            else:
+                st.info(f"Abhi kisi bhi stock mein {strategy} ka setup nahi ban raha hai.")
+
+# --- 5. Auto-Refresh Logic (Live Market Hours) ---
+def is_market_open():
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.datetime.now(ist)
+    
+    # Monday = 0 se Friday = 4
+    if now.weekday() > 4:
+        return False
+        
+    # 9:15 AM se 3:30 PM (15:30)
+    market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_end = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    
+    return market_start <= now <= market_end
+
+st.markdown("---")
+if is_market_open():
+    st.info("🟢 Live Market On: Scanner har 5 minute mein apne aap refresh hoga.")
+    time.sleep(300) 
+    st.rerun() 
+else:
+    st.warning("🔴 Market abhi closed hai. Auto-refresh off hai.")
         
