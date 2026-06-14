@@ -7,8 +7,10 @@ import numpy as np
 # Indicators
 # ---------------------------
 def add_indicators(df):
+
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
+
     df['Vol_SMA_20'] = df['Volume'].rolling(20).mean()
 
     tp = (df['High'] + df['Low'] + df['Close']) / 3
@@ -24,26 +26,64 @@ def add_indicators(df):
 
     return df
 
+
 # ---------------------------
-# NSE Top Stocks
+# NSE Stocks
 # ---------------------------
-NSE_TOP_100 = [
-    "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY",
-    "ITC","SBIN","LT","AXISBANK","KOTAKBANK",
-    "BAJFINANCE","ASIANPAINT","MARUTI","SUNPHARMA",
-    "ULTRACEMCO","NTPC","POWERGRID","TITAN",
-    "TATAMOTORS","M&M","WIPRO","HCLTECH",
-    "TECHM","INDUSINDBK","NESTLEIND","HINDUNILVR",
-    "ONGC","COALINDIA","ADANIPORTS","BAJAJFINSV",
-    "JSWSTEEL","TATASTEEL","CIPLA","GRASIM",
-    "EICHERMOT","BRITANNIA","SHRIRAMFIN","HEROMOTOCO",
-    "DRREDDY","APOLLOHOSP","HDFCLIFE","SBILIFE",
-    "BPCL","ADANIENT","DIVISLAB","TRENT",
-    "PIDILITIND","DABUR","GODREJCP","INDIGO"
+NSE_TOP_STOCKS = [
+    "RELIANCE",
+    "TCS",
+    "HDFCBANK",
+    "ICICIBANK",
+    "INFY",
+    "ITC",
+    "SBIN",
+    "LT",
+    "AXISBANK",
+    "KOTAKBANK",
+    "BAJFINANCE",
+    "ASIANPAINT",
+    "MARUTI",
+    "SUNPHARMA",
+    "ULTRACEMCO",
+    "NTPC",
+    "POWERGRID",
+    "TITAN",
+    "TATAMOTORS",
+    "WIPRO",
+    "HCLTECH",
+    "TECHM",
+    "INDUSINDBK",
+    "NESTLEIND",
+    "HINDUNILVR",
+    "ONGC",
+    "COALINDIA",
+    "ADANIPORTS",
+    "BAJAJFINSV",
+    "JSWSTEEL",
+    "TATASTEEL",
+    "CIPLA",
+    "GRASIM",
+    "EICHERMOT",
+    "BRITANNIA",
+    "SHRIRAMFIN",
+    "HEROMOTOCO",
+    "DRREDDY",
+    "APOLLOHOSP",
+    "HDFCLIFE",
+    "SBILIFE",
+    "BPCL",
+    "ADANIENT",
+    "DIVISLAB",
+    "TRENT",
+    "PIDILITIND",
+    "DABUR",
+    "GODREJCP",
+    "INDIGO"
 ]
 
 # ---------------------------
-# Streamlit UI
+# UI
 # ---------------------------
 st.set_page_config(
     page_title="NSE Stock Scanner",
@@ -59,86 +99,96 @@ strategy = st.radio(
 )
 
 # ---------------------------
-# Scan Button
+# Scanner
 # ---------------------------
 if st.button("🚀 Start Scan"):
 
     results = []
 
-    with st.spinner("Scanning stocks..."):
+    progress = st.progress(0)
 
-        for stock in NSE_TOP_100:
+    for i, stock in enumerate(NSE_TOP_STOCKS):
 
-            symbol = stock + ".NS"
+        progress.progress((i + 1) / len(NSE_TOP_STOCKS))
 
-            try:
-                df = yf.download(
-                    symbol,
-                    period="1y",
-                    interval="1d",
-                    progress=False,
-                    auto_adjust=True
+        symbol = stock + ".NS"
+
+        try:
+
+            df = yf.download(
+                symbol,
+                period="1y",
+                interval="1d",
+                auto_adjust=True,
+                progress=False
+            )
+
+            if df.empty:
+                continue
+
+            if len(df) < 220:
+                continue
+
+            df = add_indicators(df)
+
+            latest = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            # -------------------
+            # Breakout
+            # -------------------
+            if strategy in ["Breakout", "Both"]:
+
+                vol_spike = (
+                    latest["Volume"]
+                    > 1.5 * latest["Vol_SMA_20"]
                 )
 
-                if len(df) < 220:
-                    continue
+                breakout = (
+                    prev["Close"] < prev["SMA_50"]
+                    and latest["Close"] > latest["SMA_50"]
+                    and latest["Close"] > latest["VWAP"]
+                    and vol_spike
+                )
 
-                df = add_indicators(df)
+                if breakout:
 
-                latest = df.iloc[-1]
-                prev = df.iloc[-2]
+                    results.append({
+                        "Type": "Breakout",
+                        "Symbol": stock,
+                        "Price": round(float(latest["Close"]), 2),
+                        "RSI": round(float(latest["RSI"]), 2),
+                        "SL": round(float(df["Low"].tail(5).min()), 2),
+                        "Target": round(float(latest["Close"] * 1.04), 2)
+                    })
 
-                # Breakout
-                if strategy in ["Breakout", "Both"]:
+            # -------------------
+            # Reversal
+            # -------------------
+            if strategy in ["Reversal", "Both"]:
 
-                    vol_spike = (
-                        latest['Volume']
-                        > 1.5 * latest['Vol_SMA_20']
-                    )
+                reversal = (
+                    prev["RSI"] < 30
+                    and latest["RSI"] > 30
+                    and latest["Close"] > latest["SMA_200"]
+                )
 
-                    breakout = (
-                        prev['Close'] < prev['SMA_50']
-                        and latest['Close'] > latest['SMA_50']
-                        and latest['Close'] > latest['VWAP']
-                        and vol_spike
-                    )
+                if reversal:
 
-                    if breakout:
+                    results.append({
+                        "Type": "Reversal",
+                        "Symbol": stock,
+                        "Price": round(float(latest["Close"]), 2),
+                        "RSI": round(float(latest["RSI"]), 2),
+                        "SL": round(float(latest["Close"] * 0.96), 2),
+                        "Target": round(float(latest["Close"] * 1.05), 2)
+                    })
 
-                        results.append({
-                            "Type": "Breakout",
-                            "Symbol": stock,
-                            "Price": round(float(latest['Close']),2),
-                            "RSI": round(float(latest['RSI']),2),
-                            "SL": round(float(df['Low'].tail(5).min()),2),
-                            "Target": round(float(latest['Close']*1.04),2)
-                        })
-
-                # Reversal
-                if strategy in ["Reversal", "Both"]:
-
-                    reversal = (
-                        prev['RSI'] < 30
-                        and latest['RSI'] > 30
-                        and latest['Close'] > latest['SMA_200']
-                    )
-
-                    if reversal:
-
-                        results.append({
-                            "Type": "Reversal",
-                            "Symbol": stock,
-                            "Price": round(float(latest['Close']),2),
-                            "RSI": round(float(latest['RSI']),2),
-                            "SL": round(float(latest['Close']*0.96),2),
-                            "Target": round(float(latest['Close']*1.05),2)
-                        })
-
-            except Exception as e:
-                st.warning(f"{stock}: {e}")
+        except Exception:
+            continue
 
     # ---------------------------
-    # Results
+    # Output
     # ---------------------------
     if results:
 
