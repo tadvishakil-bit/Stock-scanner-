@@ -26,7 +26,7 @@ if st.button("🚀 Run Scan"):
     stocks = get_stock_list(category)
     results = []
     
-    # Progress Setup
+    # Progress UI Components
     progress_bar = st.progress(0)
     status_text = st.empty()
     total_stocks = len(stocks)
@@ -35,10 +35,10 @@ if st.button("🚀 Run Scan"):
     for i in range(0, total_stocks, batch_size):
         batch = stocks[i:i + batch_size]
         
-        # Percentage Update
-        percentage = int(((i + len(batch)) / total_stocks) * 100)
-        status_text.text(f"Scanning: {percentage}% complete ({i+1} to {min(i + batch_size, total_stocks)} of {total_stocks})")
-        progress_bar.progress(percentage / 100)
+        # Percentage Calculation
+        progress = (i + len(batch)) / total_stocks
+        progress_bar.progress(progress)
+        status_text.text(f"Scanning: {int(progress * 100)}% complete ({i+1} to {min(i + batch_size, total_stocks)} of {total_stocks})")
         
         data = yf.download(batch, period="1y", group_by="ticker", progress=False)
         
@@ -67,6 +67,7 @@ if st.button("🚀 Run Scan"):
             except:
                 continue
     
+    progress_bar.progress(1.0)
     status_text.text("Scan Completed Successfully!")
     
     if results:
