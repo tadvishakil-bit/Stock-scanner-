@@ -1,2 +1,5 @@
-yfinance
+streamlit
 pandas
+pandas-ta
+yfinance
+pytz
