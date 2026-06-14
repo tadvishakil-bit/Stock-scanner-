@@ -1,80 +1,56 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
-import time
+import requests
+import io
+import datetime
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Ultimate Swing Scanner", layout="wide")
-st.title("🎯 Pro Algo Swing Scanner")
+st.set_page_config(page_title="Offline Bhavcopy Scanner", layout="wide")
+st.title("🎯 Offline Bhavcopy Swing Scanner")
 
-# --- FUNCTIONS ---
-@st.cache_data(ttl=86400)
-def get_stock_list(category):
-    urls = {
-        "Large Cap (Nifty 100)": "https://niftyindices.com/IndexConstituent/ind_nifty100list.csv",
-        "Midcap (Nifty 150)": "https://niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv",
-        "Smallcap (Nifty 250)": "https://niftyindices.com/IndexConstituent/ind_niftysmallcap250list.csv"
-    }
-    df = pd.read_csv(urls[category])
-    return [s + ".NS" for s in df['Symbol'].head(50).tolist()] # Limit 50 for speed
+# NSE Nifty Index Links
+index_urls = {
+    "Nifty 500": "https://niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+    "Nifty Midcap 150": "https://niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv",
+    "Nifty Smallcap 250": "https://niftyindices.com/IndexConstituent/ind_niftysmallcap250list.csv"
+}
 
-# --- UI ELEMENTS ---
-category = st.radio("Select Index:", ("Large Cap (Nifty 100)", "Midcap (Nifty 150)", "Smallcap (Nifty 250)"), horizontal=True)
-strategy = st.radio("Select Strategy:", ("RSI < 30 & 50DMA Support", "52-Week Breakout + Vol Spike"), horizontal=True)
+category = st.radio("Select Index:", list(index_urls.keys()), horizontal=True)
 
-# --- SCANNER LOGIC ---
-if st.button("🚀 Run Scan"):
-    stocks = get_stock_list(category)
-    results = []
+if st.button("🚀 Scan Offline Data"):
+    # 1. Download Index List
+    try:
+        index_df = pd.read_csv(index_urls[category])
+        target_symbols = index_df['Symbol'].tolist()
+    except:
+        st.error("Index list download nahi ho paayi.")
+        st.stop()
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total_stocks = len(stocks)
+    # 2. Download Bhavcopy (Aaj ki date)
+    date = datetime.datetime.now().strftime("%d%m%Y")
+    bhav_url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{date}.csv"
+    headers = {"User-Agent": "Mozilla/5.0"}
     
-    batch_size = 10 
-    for i in range(0, total_stocks, batch_size):
-        batch = stocks[i:i + batch_size]
-        progress = (i + len(batch)) / total_stocks
-        progress_bar.progress(progress)
-        status_text.markdown(f"**Scanning:** {int(progress * 100)}% complete")
-        
-        try:
-            data = yf.download(batch, period="1y", group_by="ticker", progress=False)
+    try:
+        response = requests.get(bhav_url, headers=headers)
+        if response.status_code == 200:
+            bhav_df = pd.read_csv(io.StringIO(response.text))
+            bhav_df.columns = bhav_df.columns.str.strip()
             
-            for symbol in batch:
-                try:
-                    # Data validation
-                    if symbol not in data.columns.levels[1]: continue
-                    df = data[symbol].dropna()
-                    if len(df) < 60: continue # Data kam hai toh skip karein
-                    
-                    latest = df.iloc[-1]
-                    prev_vol = df['Volume'].rolling(20).mean().iloc[-1]
-                    
-                    if strategy == "RSI < 30 & 50DMA Support":
-                        sma_50 = df['Close'].rolling(50).mean().iloc[-1]
-                        delta = df['Close'].diff()
-                        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-                        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-                        rsi = (100 - (100 / (1 + (gain / loss)))).iloc[-1]
-                        
-                        if rsi < 35 and abs((latest['Close'] - sma_50)/sma_50) < 0.05:
-                            results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'RSI': round(rsi, 2)})
-
-                    elif strategy == "52-Week Breakout + Vol Spike":
-                        high_52w = df['High'].rolling(252).max().iloc[-1]
-                        if latest['Close'] >= high_52w * 0.95 and latest['Volume'] > prev_vol:
-                            results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'Type': 'Breakout'})
-                except:
-                    continue
-        except:
-            continue
+            # 3. Filter & Process
+            final_df = bhav_df[bhav_df['SYMBOL'].isin(target_symbols)].copy()
+            final_df['CLOSE'] = pd.to_numeric(final_df['CLOSE'], errors='coerce')
+            final_df['DELIV_QTY'] = pd.to_numeric(final_df['DELIV_QTY'], errors='coerce')
+            final_df['TRADED_QTY'] = pd.to_numeric(final_df['TRADED_QTY'], errors='coerce')
             
-    progress_bar.progress(1.0)
-    status_text.markdown("**✅ Scan Completed!**")
-    
-    if results:
-        st.dataframe(pd.DataFrame(results), use_container_width=True)
-    else:
-        st.info("No matching stocks found. Try changing the Index or Strategy.")
+            # High Delivery Accumulation Logic (>50% Delivery)
+            final_df['DELIV_%'] = (final_df['DELIV_QTY'] / final_df['TRADED_QTY']) * 100
+            
+            results = final_df[final_df['DELIV_%'] > 50][['SYMBOL', 'CLOSE', 'DELIV_%']]
+            
+            st.success(f"Found {len(results)} potential stocks.")
+            st.dataframe(results.sort_values(by='DELIV_%', ascending=False), use_container_width=True)
+        else:
+            st.warning("Bhavcopy file abhi available nahi hai. Market band hone ke baad try karein.")
+    except Exception as e:
+        st.error(f"Error: {e}")
         
