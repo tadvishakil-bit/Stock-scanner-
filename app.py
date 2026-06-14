@@ -1,6 +1,19 @@
 import streamlit as st
 import pandas as pd
-import pandas_ta as ta
+def get_indicators(df):
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['SMA_200'] = df['Close'].rolling(window=200).mean()
+    
+    # RSI calculation
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI_14'] = 100 - (100 / (1 + rs))
+    
+    df['Vol_SMA_20'] = df['Volume'].rolling(window=20).mean()
+    return df
+    
 import yfinance as yf
 import time
 import datetime
