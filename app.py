@@ -36,7 +36,7 @@ if st.button("🚀 Run Algorithm"):
     stocks = get_stock_list(category)
     results = []
     
-    # Progress UI
+    # Progress Setup
     progress_bar = st.progress(0)
     status_text = st.empty()
     total_stocks = len(stocks)
@@ -44,7 +44,11 @@ if st.button("🚀 Run Algorithm"):
     batch_size = 20
     for i in range(0, total_stocks, batch_size):
         batch = stocks[i:i + batch_size]
-        status_text.text(f"Scanning stocks {i+1} to {min(i + batch_size, total_stocks)}...")
+        
+        # Percentage Calculation & Status Update
+        percentage = int(((i + len(batch)) / total_stocks) * 100)
+        status_text.text(f"Scanning: {percentage}% complete ({i+1} to {min(i + batch_size, total_stocks)} of {total_stocks} stocks)")
+        progress_bar.progress(percentage / 100)
         
         data = yf.download(batch, period="1y", group_by="ticker", progress=False)
         
@@ -53,23 +57,21 @@ if st.button("🚀 Run Algorithm"):
                 df = data[symbol].dropna()
                 latest = df.iloc[-1]
                 
-                # Indicators Calculation
+                # Indicators
                 sma_50 = df['Close'].rolling(50).mean().iloc[-1]
                 vol_sma_20 = df['Volume'].rolling(20).mean().iloc[-1]
                 vwap = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
                 vwap_val = vwap.iloc[-1]
                 
-                # RSI Calculation
                 delta = df['Close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
                 rsi = (100 - (100 / (1 + (gain / loss)))).iloc[-1]
                 
-                # Metrics
                 dist_from_sma50 = round(((latest['Close'] - sma_50) / sma_50) * 100, 2)
                 vol_spike = latest['Volume'] > (1.5 * vol_sma_20)
                 
-                # Logic Execution
+                # Strategy Logic
                 if strategy == "Reversal & Trend Start":
                     if (rsi < 45) and (abs(latest['Close'] - vwap_val)/vwap_val < 0.02) and vol_spike:
                         results.append({'Symbol': symbol.replace('.NS',''), 'Price': round(latest['Close'], 2), 'RSI': round(rsi, 2), 'Dist_SMA50_%': dist_from_sma50, 'Vol_Spike': 'Yes'})
@@ -82,12 +84,4 @@ if st.button("🚀 Run Algorithm"):
                         send_telegram_msg(f"🚀 Breakout: {symbol.replace('.NS','')}")
             except:
                 continue
-        
-        progress_bar.progress((i + batch_size) / total_stocks)
-    
-    status_text.text("Scan Completed!")
-    if results:
-        st.dataframe(pd.DataFrame(results), use_container_width=True)
-    else:
-        st.info("No matching stocks found for selected criteria.")
-        
+                        
