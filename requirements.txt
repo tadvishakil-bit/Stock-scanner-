@@ -2,4 +2,3 @@ streamlit
 pandas
 yfinance
 pytz
-pandas_ta
